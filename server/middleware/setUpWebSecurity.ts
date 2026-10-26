@@ -34,6 +34,13 @@ export default function setUpWebSecurity(): Router {
             (_req: IncomingMessage, res: ServerResponse) => `'nonce-${(res as Response).locals.cspNonce}'`,
           ],
           fontSrc: ["'self'"],
+          workerSrc: ["'self'", 'blob:'],
+          // The map component sets attributes such as `style.cursor`/`style.display`/positioning transforms directly via JS (standard behaviour
+          // for OpenLayers/MapLibre). 'unsafe-inline' is therefore required here, but it is scoped to
+          // attribute mutations only - it does not re-open the door to injected <style> elements or
+          // external stylesheets, which remain locked down by styleSrc above.
+          // See https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/style-src-attr for more information.
+          styleSrcAttr: ["'unsafe-inline'"],
           formAction: [`'self' ${config.apis.hmppsAuth.externalUrl}`],
           ...(config.production ? {} : { upgradeInsecureRequests: null }),
         },

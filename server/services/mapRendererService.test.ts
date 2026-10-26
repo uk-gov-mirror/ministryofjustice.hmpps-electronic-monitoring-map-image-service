@@ -64,4 +64,15 @@ describe('MapRendererService', () => {
     expect(mapElement.screenshot).not.toHaveBeenCalled()
     expect(context.close).toHaveBeenCalledTimes(1)
   })
+
+  it('times out when the page never finishes rendering and still closes the context', async () => {
+    const { page, mapElement, context, browser } = createMocks()
+    page.evaluate.mockReturnValue(new Promise(() => {}))
+    const browserService = { getBrowser: jest.fn().mockResolvedValue(browser) } as unknown as PlaywrightBrowserService
+    const service = new MapRendererService(browserService, 'http://map.test', 20)
+
+    await expect(service.render(request)).rejects.toThrow('Map render did not complete within 20ms')
+    expect(mapElement.screenshot).not.toHaveBeenCalled()
+    expect(context.close).toHaveBeenCalledTimes(1)
+  })
 })

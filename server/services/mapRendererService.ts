@@ -32,12 +32,27 @@ const screenshotMapElement = async (page: Page, format: 'jpeg' | 'png', quality?
 }
 
 // Hand the presented data model to the client script and wait for the map to finish rendering.
-const renderMapInPage = async (page: Page, model: MapRenderModel): Promise<void> => {
-  await page.evaluate(async renderModel => {
+// page.evaluate ignores the page default timeout, so a render that never completes is raced against our own.
+const renderMapInPage = async (page: Page, model: MapRenderModel, timeoutMs: number): Promise<void> => {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Map render did not complete within ${timeoutMs}ms`)), timeoutMs)
+  })
+
+  const render = page.evaluate(async renderModel => {
     const { renderMap } = globalThis as unknown as { renderMap?: (m: unknown) => Promise<void> }
     if (!renderMap) throw new Error('renderMap is not available on the map page')
     await renderMap(renderModel)
   }, model)
+
+  // Closing the context after a timeout rejects the abandoned evaluate, which must not go unhandled.
+  render.catch(() => {})
+
+  try {
+    await Promise.race([render, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export default class MapRendererService {
@@ -67,7 +82,7 @@ export default class MapRendererService {
       page.setDefaultNavigationTimeout(this.timeoutMs)
 
       await page.goto(`${this.baseUrl}${MAP_PATH}`, { waitUntil: 'domcontentloaded' })
-      await renderMapInPage(page, model)
+      await renderMapInPage(page, model, this.timeoutMs)
       logStep('render:pageReady')
 
       const image = await screenshotMapElement(page, format, quality)
