@@ -34,6 +34,8 @@ const playwrightConfig = () => {
 
   return {
     chromiumExecutablePath: chromiumExecutablePath === '' ? undefined : chromiumExecutablePath,
+    // The service renders its own /map page
+    renderBaseUrl: get('MAP_RENDER_BASE_URL', `http://localhost:${process.env.PORT || 3000}`),
   }
 }
 
