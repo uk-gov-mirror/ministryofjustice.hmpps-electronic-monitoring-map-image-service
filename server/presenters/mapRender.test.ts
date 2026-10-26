@@ -10,7 +10,7 @@ describe('presentMapRender', () => {
     const model = presentMapRender(parse({ layers: [{ type: 'locations', id: 'l', points: [point] }] }))
 
     expect(model.output).toEqual({ width: 800, height: 600, format: 'jpeg', quality: 90, pixelRatio: 1 })
-    expect(model.viewport).toEqual({ mode: 'fit', padding: 20, maxZoom: 18 })
+    expect(model.viewport).toEqual({ mode: 'fit', layerIds: ['l'], padding: 20, maxZoom: 18 })
   })
 
   it('keeps an explicit viewport', () => {
@@ -30,7 +30,63 @@ describe('presentMapRender', () => {
       parse({ viewport: { mode: 'fit', padding: 50 }, layers: [{ type: 'locations', id: 'l', points: [point] }] }),
     )
 
-    expect(model.viewport).toEqual({ mode: 'fit', padding: 50, maxZoom: 18 })
+    expect(model.viewport).toEqual({ mode: 'fit', layerIds: ['l'], padding: 50, maxZoom: 18 })
+  })
+
+  it('fits to the listed layers only when fitToLayerIds is given', () => {
+    const model = presentMapRender(
+      parse({
+        viewport: { mode: 'fit', fitToLayerIds: ['b'] },
+        layers: [
+          { type: 'locations', id: 'a', points: [point] },
+          { type: 'locations', id: 'b', points: [point] },
+        ],
+      }),
+    )
+
+    expect(model.viewport).toMatchObject({ mode: 'fit', layerIds: ['b'] })
+  })
+
+  it('maps track entry and exit options and bearings for the component', () => {
+    const model = presentMapRender(
+      parse({
+        layers: [
+          {
+            type: 'tracks',
+            id: 't',
+            points: [
+              { ...point, entryBearing: 60 },
+              { latitude: 51.6, longitude: -0.2, exitBearing: 75 },
+            ],
+            entryExit: {
+              extensionMetres: 40,
+              extendBeyond: { centre: { latitude: 53.4, longitude: -2.5 }, radiusMetres: 100 },
+            },
+          },
+        ],
+      }),
+    )
+
+    expect(model.layers[0].options).toMatchObject({
+      positions: [expect.objectContaining({ entryBearing: 60 }), expect.objectContaining({ exitBearing: 75 })],
+      entryExit: {
+        enabled: true,
+        extensionDistanceMeters: 40,
+        direction: { property: { entry: 'entryBearing', exit: 'exitBearing' }, units: 'degrees' },
+        centre: [-2.5, 53.4],
+        radiusMeters: 100,
+      },
+    })
+  })
+
+  it('defaults the extension distance and leaves entryExit off when not requested', () => {
+    const track = { type: 'tracks', id: 't', points: [point, { ...point, longitude: -0.2 }] }
+    const withEntryExit = presentMapRender(parse({ layers: [{ ...track, entryExit: {} }] }))
+    const without = presentMapRender(parse({ layers: [track] }))
+
+    expect(withEntryExit.layers[0].options).toMatchObject({ entryExit: { extensionDistanceMeters: 50 } })
+    expect(withEntryExit.layers[0].options).not.toHaveProperty('entryExit.centre')
+    expect(without.layers[0].options).not.toHaveProperty('entryExit')
   })
 
   it('fills only the missing output fields', () => {
@@ -90,6 +146,60 @@ describe('presentMapRender', () => {
 
     expect(model.layers[0].options.positions?.[0].precision).toBe(250)
     expect(model.layers[1].options.positions?.[0].precision).toBe(0)
+  })
+
+  it('presents a null circle fill as transparent and keeps the default fill when omitted', () => {
+    const circle = (style?: object) => ({
+      type: 'circles' as const,
+      id: 'c',
+      points: [{ ...point, precision: 5 }],
+      ...(style ? { style } : {}),
+    })
+
+    const outline = presentMapRender(parse({ layers: [circle({ fill: null })] }))
+    const defaulted = presentMapRender(parse({ layers: [circle()] }))
+
+    expect(outline.layers[0].options).toMatchObject({ style: { fill: 'rgba(0, 0, 0, 0)' } })
+    expect(defaulted.layers[0].options).toMatchObject({ style: { fill: 'rgba(29, 112, 184, 0.15)' } })
+  })
+
+  it('maps the locations marker to the layer style', () => {
+    const model = presentMapRender(
+      parse({
+        layers: [
+          {
+            type: 'locations',
+            id: 'l',
+            points: [point],
+            marker: { type: 'circle', radius: 9, fill: '#00ff00', stroke: { color: '#000000', width: 1 } },
+          },
+        ],
+      }),
+    )
+
+    expect(model.layers[0].options.style).toEqual({
+      radius: 9,
+      fill: '#00ff00',
+      stroke: { color: '#000000', width: 1 },
+    })
+  })
+
+  it('accepts style as an alias for marker, with marker winning when both are sent', () => {
+    const model = presentMapRender(
+      parse({
+        layers: [
+          {
+            type: 'locations',
+            id: 'l',
+            points: [point],
+            style: { radius: 9, fill: '#00ff00' },
+            marker: { fill: '#0000ff' },
+          },
+        ],
+      }),
+    )
+
+    expect(model.layers[0].options.style).toMatchObject({ radius: 9, fill: '#0000ff' })
   })
 
   it('turns off accessible marker buttons on locations', () => {

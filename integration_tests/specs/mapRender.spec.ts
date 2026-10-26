@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import ordnanceSurvey from '../mockApis/ordnanceSurvey'
 import { resetStubs } from '../mockApis/wiremock'
+import presentMapRender from '../../server/presenters/mapRender'
 import mapRenderSchema from '../../server/schemas/mapRender'
 import MapRendererService from '../../server/services/mapRendererService'
 import PlaywrightBrowserService from '../../server/services/playwrightBrowserService'
@@ -124,6 +125,74 @@ test.describe('Map render', () => {
     })
 
     expect(far.image.equals(near.image)).toBe(false)
+  })
+
+  test('fits to only the listed layers', async () => {
+    const layers = [
+      { type: 'locations', id: 'near', points: points.slice(0, 2) },
+      { type: 'locations', id: 'far', points: [{ latitude: 52.5, longitude: -1.9 }] },
+    ]
+    const all = await render({ output: { format: 'png' }, layers })
+    const nearOnly = await render({
+      output: { format: 'png' },
+      viewport: { mode: 'fit', fitToLayerIds: ['near'] },
+      layers,
+    })
+
+    expect(nearOnly.image.equals(all.image)).toBe(false)
+  })
+
+  test('extends a track at its entry and exit when requested', async () => {
+    const base = { output: { format: 'png' }, viewport: { mode: 'explicit', centre: points[1], zoom: 13 } }
+    const track = {
+      type: 'tracks',
+      id: 't',
+      points: [{ ...points[0], entryBearing: 90 }, { ...points[1] }, { ...points[2], exitBearing: 45 }],
+    }
+    const plain = await render({ ...base, layers: [track] })
+    const extended = await render({ ...base, layers: [{ ...track, entryExit: { extensionMetres: 500 } }] })
+
+    expect(extended.image.equals(plain.image)).toBe(false)
+  })
+
+  test('includes the full radius of circles when fitting', async () => {
+    const centre = { latitude: 51.5, longitude: -0.12 }
+    const radiusMetres = 2000
+    const model = presentMapRender(
+      mapRenderSchema.parse({
+        layers: [{ type: 'circles', id: 'c', points: [{ ...centre, precision: radiusMetres }] }],
+      }),
+    )
+
+    const browser = await browserService.getBrowser()
+    const context = await browser.newContext({ viewport: { width: model.output.width, height: model.output.height } })
+    try {
+      const page = await context.newPage()
+      await page.goto('http://localhost:3007/map', { waitUntil: 'domcontentloaded' })
+      const extent = await page.evaluate(async renderModel => {
+        const { renderMap } = globalThis as unknown as { renderMap: (m: unknown) => Promise<void> }
+        await renderMap(renderModel)
+        const map = (
+          document.querySelector('em-map') as unknown as {
+            olMapInstance: { getView(): { calculateExtent(size: unknown): number[] }; getSize(): unknown }
+          }
+        ).olMapInstance
+        return map.getView().calculateExtent(map.getSize())
+      }, model)
+
+      // Spherical mercator metres, which are larger than ground metres at this latitude, so this is a lenient bound
+      const earthRadius = 6378137
+      const x = (centre.longitude * Math.PI * earthRadius) / 180
+      const y = earthRadius * Math.log(Math.tan(Math.PI / 4 + (centre.latitude * Math.PI) / 360))
+      const [minX, minY, maxX, maxY] = extent
+
+      expect(minX).toBeLessThanOrEqual(x - radiusMetres)
+      expect(maxX).toBeGreaterThanOrEqual(x + radiusMetres)
+      expect(minY).toBeLessThanOrEqual(y - radiusMetres)
+      expect(maxY).toBeGreaterThanOrEqual(y + radiusMetres)
+    } finally {
+      await context.close()
+    }
   })
 
   test('renders an explicit viewport with no layers', async () => {

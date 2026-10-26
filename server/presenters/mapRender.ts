@@ -7,9 +7,16 @@ import type {
   TracksLayerOptions,
 } from '@ministryofjustice/hmpps-electronic-monitoring-components/map/layers'
 import type { MapRenderLayer, MapRenderRequest } from '../schemas/mapRender'
-import { DEFAULT_HEIGHT_PX, DEFAULT_PADDING_PX, DEFAULT_PIXEL_RATIO, DEFAULT_WIDTH_PX } from '../schemas/mapRender'
+import {
+  DEFAULT_EXTENSION_METRES,
+  DEFAULT_HEIGHT_PX,
+  DEFAULT_PADDING_PX,
+  DEFAULT_PIXEL_RATIO,
+  DEFAULT_WIDTH_PX,
+} from '../schemas/mapRender'
 
 const DEFAULT_BLUE = '#1d70b8'
+const TRANSPARENT = 'rgba(0, 0, 0, 0)'
 const DEFAULT_MAX_ZOOM = 18
 const DEFAULT_FORMAT = 'jpeg'
 const DEFAULT_JPEG_QUALITY = 90
@@ -35,7 +42,7 @@ export type MapRenderModel = {
     pixelRatio: number
   }
   viewport:
-    | { mode: 'fit'; padding: number; maxZoom: number }
+    | { mode: 'fit'; layerIds: string[]; padding: number; maxZoom: number }
     | { mode: 'explicit'; centre: { latitude: number; longitude: number }; zoom: number }
   layers: PresentedLayer[]
   fonts: string[]
@@ -44,15 +51,40 @@ export type MapRenderModel = {
 
 type StrokeDefaults = { color: string; width: number; lineDash?: number[] }
 
+// Names of the Position fields the component reads track bearings from
+const ENTRY_BEARING_PROPERTY = 'entryBearing'
+const EXIT_BEARING_PROPERTY = 'exitBearing'
+
 const presentPositions = (
-  points: Array<{ latitude: number; longitude: number; precision?: number; label?: string }>,
+  points: Array<{
+    latitude: number
+    longitude: number
+    precision?: number
+    label?: string
+    entryBearing?: number
+    exitBearing?: number
+  }>,
 ): Position[] =>
-  points.map(({ latitude, longitude, precision, label }) => ({
+  points.map(({ latitude, longitude, precision, label, entryBearing, exitBearing }) => ({
     latitude,
     longitude,
     precision: precision ?? UNUSED_PRECISION,
     ...(label === undefined ? {} : { label }),
+    ...(entryBearing === undefined ? {} : { [ENTRY_BEARING_PROPERTY]: entryBearing }),
+    ...(exitBearing === undefined ? {} : { [EXIT_BEARING_PROPERTY]: exitBearing }),
   }))
+
+const presentEntryExit = (entryExit: NonNullable<Extract<MapRenderLayer, { type: 'tracks' }>['entryExit']>) => ({
+  enabled: true,
+  extensionDistanceMeters: entryExit.extensionMetres ?? DEFAULT_EXTENSION_METRES,
+  direction: { property: { entry: ENTRY_BEARING_PROPERTY, exit: EXIT_BEARING_PROPERTY }, units: 'degrees' as const },
+  ...(entryExit.extendBeyond
+    ? {
+        centre: [entryExit.extendBeyond.centre.longitude, entryExit.extendBeyond.centre.latitude] as [number, number],
+        radiusMeters: entryExit.extendBeyond.radiusMetres,
+      }
+    : {}),
+})
 
 const presentLayer = (layer: MapRenderLayer, index: number): PresentedLayer => {
   // Draw order is array order
@@ -71,6 +103,7 @@ const presentLayer = (layer: MapRenderLayer, index: number): PresentedLayer => {
               ...(layer.style?.stroke?.lineDash ? { lineDash: layer.style.stroke.lineDash } : {}),
             },
           },
+          ...(layer.entryExit ? { entryExit: presentEntryExit(layer.entryExit) } : {}),
         },
       }
 
@@ -96,12 +129,17 @@ const presentLayer = (layer: MapRenderLayer, index: number): PresentedLayer => {
         options: {
           ...common,
           positions: presentPositions(layer.points),
-          style: { fill: layer.style?.fill ?? 'rgba(29, 112, 184, 0.15)', stroke },
+          style: {
+            // null means outline only, which the component needs as a transparent fill
+            fill: layer.style?.fill === null ? TRANSPARENT : (layer.style?.fill ?? 'rgba(29, 112, 184, 0.15)'),
+            stroke,
+          },
         },
       }
     }
 
-    case 'locations':
+    case 'locations': {
+      const marker = { ...layer.style, ...layer.marker }
       return {
         type: 'locations',
         options: {
@@ -111,12 +149,13 @@ const presentLayer = (layer: MapRenderLayer, index: number): PresentedLayer => {
           renderer: 'auto',
           positions: presentPositions(layer.points),
           style: {
-            radius: layer.style?.radius ?? 6,
-            fill: layer.style?.fill ?? DEFAULT_BLUE,
-            stroke: { color: layer.style?.stroke?.color ?? '#ffffff', width: layer.style?.stroke?.width ?? 2 },
+            radius: marker.radius ?? 6,
+            fill: marker.fill ?? DEFAULT_BLUE,
+            stroke: { color: marker.stroke?.color ?? '#ffffff', width: marker.stroke?.width ?? 2 },
           },
         },
       }
+    }
 
     case 'text': {
       const haloWidth = layer.style?.haloWidth ?? 3
@@ -148,13 +187,17 @@ const presentLayer = (layer: MapRenderLayer, index: number): PresentedLayer => {
   }
 }
 
-const presentViewport = (viewport: MapRenderRequest['viewport']): MapRenderModel['viewport'] => {
+const presentViewport = (
+  viewport: MapRenderRequest['viewport'],
+  layers: MapRenderLayer[],
+): MapRenderModel['viewport'] => {
   if (viewport?.mode === 'explicit') {
     return { mode: 'explicit', centre: viewport.centre, zoom: viewport.zoom }
   }
 
   return {
     mode: 'fit',
+    layerIds: viewport?.fitToLayerIds ?? layers.map(layer => layer.id),
     padding: viewport?.padding ?? DEFAULT_PADDING_PX,
     maxZoom: viewport?.maxZoom ?? DEFAULT_MAX_ZOOM,
   }
@@ -180,7 +223,7 @@ const presentMapRender = ({ output = {}, viewport, layers }: MapRenderRequest): 
       pixelRatio: output.pixelRatio ?? DEFAULT_PIXEL_RATIO,
       ...(format === 'jpeg' ? { quality: output.quality ?? DEFAULT_JPEG_QUALITY } : {}),
     },
-    viewport: presentViewport(viewport),
+    viewport: presentViewport(viewport, layers),
     layers: presentedLayers,
     fonts,
     ...(output.attribution ? { attribution: output.attribution } : {}),

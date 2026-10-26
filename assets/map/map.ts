@@ -47,10 +47,11 @@ const applyViewport = (emMap: EmMap, model: MapRenderModel) => {
     return
   }
 
-  const fitted = emMap.fitToLayers(
-    model.layers.map(layer => layer.options.id!),
-    { padding: viewport.padding, maxZoom: viewport.maxZoom, animate: false },
-  )
+  const fitted = emMap.fitToLayers(viewport.layerIds, {
+    padding: viewport.padding,
+    maxZoom: viewport.maxZoom,
+    animate: false,
+  })
 
   if (!fitted) {
     throw new Error('Could not fit the map to the supplied layers')

@@ -20,6 +20,83 @@ describe('mapRenderSchema', () => {
     expect(mapRenderSchema.safeParse(validRequest()).success).toBe(true)
   })
 
+  it('accepts an outline-only circles layer and a circle marker on locations', () => {
+    const points = [{ latitude: 51.5, longitude: -0.1 }]
+    const request = {
+      layers: [
+        {
+          type: 'circles',
+          id: 'c',
+          points: points.map(point => ({ ...point, precision: 5 })),
+          style: { fill: null, stroke: { color: '#f2c94c', width: 2, lineDash: [8, 8] } },
+        },
+        {
+          type: 'locations',
+          id: 'l',
+          points,
+          marker: { type: 'circle', radius: 5, fill: '#1d70b8', stroke: { color: '#ffffff', width: 1 } },
+        },
+      ],
+    }
+
+    expect(mapRenderSchema.safeParse(request).success).toBe(true)
+  })
+
+  it('accepts style as an alias for marker on locations but rejects unknown marker types', () => {
+    const points = [{ latitude: 51.5, longitude: -0.1 }]
+
+    expect(
+      mapRenderSchema.safeParse({ layers: [{ type: 'locations', id: 'l', points, style: { radius: 5 } }] }).success,
+    ).toBe(true)
+    expect(
+      mapRenderSchema.safeParse({ layers: [{ type: 'locations', id: 'l', points, marker: { type: 'pin' } }] }).success,
+    ).toBe(false)
+  })
+
+  it('accepts track entry and exit options with bearings', () => {
+    const request = {
+      layers: [
+        {
+          type: 'tracks',
+          id: 't',
+          points: [
+            { latitude: 51.5, longitude: -0.1, entryBearing: 60 },
+            { latitude: 51.6, longitude: -0.2, exitBearing: 75 },
+          ],
+          entryExit: {
+            extensionMetres: 50,
+            extendBeyond: { centre: { latitude: 51.5, longitude: -0.1 }, radiusMetres: 100 },
+          },
+        },
+      ],
+    }
+
+    expect(mapRenderSchema.safeParse(request).success).toBe(true)
+  })
+
+  it('rejects entryExit on lines and out of range bearings', () => {
+    const points = [
+      { latitude: 51.5, longitude: -0.1 },
+      { latitude: 51.6, longitude: -0.2 },
+    ]
+    const entryExit = { extensionMetres: 50 }
+
+    expect(mapRenderSchema.safeParse({ layers: [{ type: 'lines', id: 'l', points, entryExit }] }).success).toBe(false)
+    expect(
+      mapRenderSchema.safeParse({
+        layers: [{ type: 'tracks', id: 't', points: [{ ...points[0], entryBearing: 361 }, points[1]] }],
+      }).success,
+    ).toBe(false)
+  })
+
+  it('accepts fitToLayerIds that match supplied layers and rejects unknown ids', () => {
+    const layers = [{ type: 'locations', id: 'a', points: [{ latitude: 51.5, longitude: -0.1 }] }]
+
+    expect(mapRenderSchema.safeParse({ viewport: { mode: 'fit', fitToLayerIds: ['a'] }, layers }).success).toBe(true)
+    expect(mapRenderSchema.safeParse({ viewport: { mode: 'fit', fitToLayerIds: ['x'] }, layers }).success).toBe(false)
+    expect(mapRenderSchema.safeParse({ viewport: { mode: 'fit', fitToLayerIds: [] }, layers }).success).toBe(false)
+  })
+
   it('accepts a request with only layers', () => {
     const { output, ...layersOnly } = validRequest()
 

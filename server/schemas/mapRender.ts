@@ -37,6 +37,14 @@ const circlePointSchema = pointSchema.extend({
   precision: z.number().positive().max(100_000),
 })
 
+// Direction of travel in degrees, used to extend a track at its ends
+const bearingSchema = z.number().min(0).max(360)
+
+const trackPointSchema = pointSchema.extend({
+  entryBearing: bearingSchema.optional(),
+  exitBearing: bearingSchema.optional(),
+})
+
 const textPointSchema = pointSchema.extend({
   label: z.string().trim().min(1).max(100),
 })
@@ -48,15 +56,29 @@ const MIN_LINE_POINTS = 2
 
 const layerIdSchema = z.string().trim().min(1).max(64)
 
+export const DEFAULT_EXTENSION_METRES = 50
+
+const entryExitSchema = z.strictObject({
+  extensionMetres: z.number().positive().max(10_000).optional(),
+  // Extends the ends of the track beyond the edge of this circle instead of from the end point
+  extendBeyond: z
+    .strictObject({
+      centre: z.strictObject({ latitude: latitudeSchema, longitude: longitudeSchema }),
+      radiusMetres: z.number().positive().max(100_000),
+    })
+    .optional(),
+})
+
 const tracksLayerSchema = z.strictObject({
   type: z.literal('tracks'),
   id: layerIdSchema,
-  points: pointsOf(pointSchema, MIN_LINE_POINTS),
+  points: pointsOf(trackPointSchema, MIN_LINE_POINTS),
   style: z
     .strictObject({
       stroke: z.strictObject({ color: colourSchema.optional(), lineDash: lineDashSchema.optional() }).optional(),
     })
     .optional(),
+  entryExit: entryExitSchema.optional(),
 })
 
 const linesLayerSchema = z.strictObject({
@@ -72,7 +94,7 @@ const circlesLayerSchema = z.strictObject({
   points: pointsOf(circlePointSchema),
   style: z
     .strictObject({
-      fill: colourSchema.optional(),
+      fill: colourSchema.nullable().optional(),
       stroke: z
         .strictObject({
           color: colourSchema.optional(),
@@ -84,19 +106,23 @@ const circlesLayerSchema = z.strictObject({
     .optional(),
 })
 
+const locationMarkerSchema = z.strictObject({
+  // circle is the only marker for now; it is optional so a bare marker style needs no type
+  type: z.literal('circle').optional(),
+  radius: z.number().positive().max(50).optional(),
+  fill: colourSchema.optional(),
+  stroke: z
+    .strictObject({ color: colourSchema.optional(), width: z.number().positive().max(20).optional() })
+    .optional(),
+})
+
 const locationsLayerSchema = z.strictObject({
   type: z.literal('locations'),
   id: layerIdSchema,
   points: pointsOf(pointSchema),
-  style: z
-    .strictObject({
-      radius: z.number().positive().max(50).optional(),
-      fill: colourSchema.optional(),
-      stroke: z
-        .strictObject({ color: colourSchema.optional(), width: z.number().positive().max(20).optional() })
-        .optional(),
-    })
-    .optional(),
+  // style is an alternative for marker, consistent with the other layer types; marker wins if both are sent
+  marker: locationMarkerSchema.optional(),
+  style: locationMarkerSchema.optional(),
 })
 
 const textLayerSchema = z.strictObject({
@@ -140,6 +166,8 @@ const outputSchema = z
 
 const fitViewportSchema = z.strictObject({
   mode: z.literal('fit'),
+  // Defaults to every layer. All supplied layers are drawn either way.
+  fitToLayerIds: z.array(layerIdSchema).min(1).max(MAX_LAYERS).optional(),
   padding: z.number().min(0).max(500).optional(),
   maxZoom: z.number().min(MIN_ZOOM).max(MAX_ZOOM).optional(),
 })
@@ -185,6 +213,16 @@ const mapRenderSchema = z
       message: `Image is too large once pixelRatio is applied (maximum ${MAX_RENDERED_PIXELS} pixels)`,
       path: ['output'],
     },
+  )
+  .refine(
+    request => {
+      if (request.viewport?.mode !== 'fit' || !request.viewport.fitToLayerIds) return true
+
+      const layerIds = new Set(request.layers.map(layer => layer.id))
+
+      return request.viewport.fitToLayerIds.every(id => layerIds.has(id))
+    },
+    { message: 'fitToLayerIds must only list ids of supplied layers', path: ['viewport', 'fitToLayerIds'] },
   )
   .refine(
     request => {
