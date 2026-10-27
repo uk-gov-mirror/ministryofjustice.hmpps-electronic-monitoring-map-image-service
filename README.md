@@ -3,42 +3,84 @@
 [![Ministry of Justice Repository Compliance Badge](https://github-community.service.justice.gov.uk/repository-standards/api/hmpps-electronic-monitoring-map-image-service/badge?style=flat)](https://github-community.service.justice.gov.uk/repository-standards/hmpps-electronic-monitoring-map-image-service)
 [![Docker Repository on ghcr](https://img.shields.io/badge/ghcr.io-repository-2496ED.svg?logo=docker)](https://ghcr.io/ministryofjustice/hmpps-electronic-monitoring-map-image-service)
 
-Template github repo used for new Typescript based projects.
-
-# Instructions
-
-If this is a HMPPS project then the creation of new services is automated and cloning/forking this repository is not required.
-
-Documentation to create new services is located [here](https://tech-docs.hmpps.service.justice.gov.uk/creating-new-services/).
-
-This project is community managed by the mojdt `#typescript` slack channel.
-Please raise any questions or queries there. Contributions welcome!
+Service that renders map images for the Electronic Monitoring Crime Matching service, using the Electronic Monitoring map component in headless Chromium.
 
 Our security policy is located [here](https://github.com/ministryofjustice/hmpps-electronic-monitoring-map-image-service/security/policy).
 
-More information about the template project including features can be
-found [here](https://dsdmoj.atlassian.net/wiki/spaces/NDSS/pages/3488677932/Typescript+template+project).
+## Map rendering
 
-## Creating a Cloud Platform namespace
+The service renders map images using the `@ministryofjustice/hmpps-electronic-monitoring-components` map in headless Chromium (Playwright).
 
-When deploying to a new namespace, you may wish to use the
-[templates project namespace](https://github.com/ministryofjustice/cloud-platform-environments/tree/main/namespaces/live.cloud-platform.service.justice.gov.uk/hmpps-templates-dev)
-as the basis for your new namespace. This namespace contains both the kotlin and typescript template projects, which
-is the usual way that projects are setup. This namespace includes an AWS elasticache setup - which is required by this
-template project.
+### Request contract
 
-Copy this folder and update all the existing namespace references. If you only need the typescript configuration then
-remove all kotlin references. Submit a PR to the Cloud Platform team in #ask-cloud-platform. Further instructions from
-the Cloud Platform team can be found in
-the [Cloud Platform User Guide](https://user-guide.cloud-platform.service.justice.gov.uk/#cloud-platform-user-guide)
+Everything is optional except that a request with no layers must have an explicit viewport.
 
-## Customising the new project
+```json
+{
+  "output": {
+    "width": 800,
+    "height": 600,
+    "format": "jpeg",
+    "quality": 90,
+    "pixelRatio": 1,
+    "attribution": "Contains OS data © Crown copyright"
+  },
+  "viewport": { "mode": "fit", "padding": 20, "maxZoom": 18 },
+  "layers": [
+    {
+      "type": "tracks",
+      "id": "route",
+      "points": [
+        { "latitude": 51.5, "longitude": -0.12 },
+        { "latitude": 51.52, "longitude": -0.09 }
+      ],
+      "style": { "stroke": { "color": "#d4351c", "lineDash": [10, 8] } }
+    }
+  ]
+}
+```
 
-As part of the automation to create the new service, various parts of the codebase will be updated to reflect it's specific name.
+| Field                 | Default       | Notes                                                                                                                                                                                                                                                                     |
+| --------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `output.width/height` | 800 x 600     | 100-2000 px each. Width x height x pixelRatio² must not exceed 4,000,000 pixels.                                                                                                                                                                                          |
+| `output.format`       | `jpeg`        | `jpeg` or `png`.                                                                                                                                                                                                                                                          |
+| `output.quality`      | 90            | 1-100, jpeg only.                                                                                                                                                                                                                                                         |
+| `output.pixelRatio`   | 1             | 1-2. The image is `width x pixelRatio` pixels wide.                                                                                                                                                                                                                       |
+| `output.attribution`  | none          | Plain text, 1-200 characters. See below.                                                                                                                                                                                                                                  |
+| `viewport`            | fit to layers | If sent it must include `mode`. `fit` takes `padding` (0-500, default 20), `maxZoom` (5-20, default 18) and optional `fitToLayerIds` (ids of supplied layers to fit to; all are still drawn, and circle radii are included). `explicit` takes `centre` and `zoom` (5-20). |
+| `layers`              | `[]`          | At most 20 layers with unique ids, 5,000 points per layer and 10,000 points in total.                                                                                                                                                                                     |
+
+Colours are hex (`#1d7`, `#11dd77` or `#11dd77ff`).
+
+Only the layers supplied are drawn, and the map fits to those layers' points by default.
+
+### Layer types
+
+| Type        | Points                                                  | Styling                                                                                                                                                                                                                                                                           |
+| ----------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tracks`    | At least 2 `{ latitude, longitude }`                    | `style.stroke.color`, `style.stroke.lineDash` for a dashed track. Draws direction arrows. Points may have `entryBearing`/`exitBearing` (0-360). Optional `entryExit: { extensionMetres?, extendBeyond?: { centre, radiusMetres } }` extends the track at its ends (default 50 m). |
+| `lines`     | At least 2 `{ latitude, longitude }`                    | `style.stroke.color`. A plain solid line with no arrows.                                                                                                                                                                                                                          |
+| `circles`   | `{ latitude, longitude, precision }` (radius in metres) | `style.fill` (`null` for an outline only), `style.stroke.color`, `.width` and `.lineDash`.                                                                                                                                                                                        |
+| `locations` | `{ latitude, longitude }`                               | `marker`: `{ type: "circle", radius, fill, stroke: { color, width } }`. `circle` is the only type. `style` is accepted as an alias for `marker`; `marker` wins if both are sent.                                                                                                  |
+| `text`      | `{ latitude, longitude, label }`                        | `style.color`, `.size`, `.haloColor` and `.haloWidth` (0 for no halo).                                                                                                                                                                                                            |
+
+Layers are drawn in array order: the first layer is at the bottom and the last on top. There is no separate z-index in the contract, so reorder the layers to change the stacking (for example, put `text` last so labels are not hidden by `locations`).
+
+### Attribution
+
+The map has no default attribution. If the image is published or shown to users, the caller is responsible for supplying any attribution wording the map data licence requires in `output.attribution`.
+
+### Testing map rendering
+
+`integration_tests/specs/mapRender.spec.ts` renders real JPEG and PNG images through Chromium. Run it with the app and wiremock started as described in [Running integration tests](#running-integration-tests):
+
+`npx playwright test mapRender`
+
+The map tiles are stubbed, so the base map is a plain background and the layers are what you see. Each layer type's image is attached to the Playwright report (`npx playwright show-report`).
 
 ## Oauth2 Credentials
 
-The template project is set up to run with two sets of credentials, each one support a different oauth2 flows.
+The service is set up to run with two sets of credentials, each one support a different oauth2 flows.
 These need to be requested from the auth team by filling in
 this [template](https://dsdmoj.atlassian.net/browse/HAAR-140) and raising on their slack channel.
 
@@ -86,9 +128,9 @@ across a variety of services is very difficult.
 
 When deployed to an environment with multiple pods we run applications with an instance of REDIS/Elasticache to provide
 a distributed cache of sessions.
-The template app is, by default, configured not to use REDIS when running locally.
+The app is, by default, configured not to use REDIS when running locally.
 
-## Developing against the template project
+## Development
 
 ### Running the app via docker-compose
 
@@ -102,7 +144,7 @@ The production image now uses the `hmpps-node:24-alpine-runtime` base image and 
 
 ### Running the app for development
 
-To start the main services excluding the example typescript template app:
+To start the main services excluding the app:
 
 `docker compose up --scale=app=0`
 
@@ -178,28 +220,6 @@ And then either, run tests in headless mode with:
 Or run tests with the UI:
 
 `npm run int-test-ui`
-
-## Keeping your app up-to-date
-
-While there are multiple ways to keep your project up-to-date this [method](https://mojdt.slack.com/archives/C69NWE339/p1694009011413449) doesn't require you to keep cherry picking the changes, however if that works for you there is no reason to stop.
-
-In your service, add the template as a remote:
-
-`git remote add template https://github.com/ministryofjustice/hmpps-electronic-monitoring-map-image-service`
-
-Create a branch and switch to it, eg:
-
-`git checkout -b template-changes-2309`
-
-Fetch all remotes:
-
-`git fetch --all`
-
-Merge the changes from the template into your service source:
-
-`git merge template/main --allow-unrelated-histories`
-
-You'll need to manually handle the merge of the changes, but if you do it early, carefully, and regularly, it won't be too much of a hassle.
 
 ## Change log
 
